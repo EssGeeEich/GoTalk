@@ -8,6 +8,15 @@ import (
 	"net/http"
 )
 
+type CredentialValidationResult int64
+
+const (
+	CredentialsInvalid CredentialValidationResult = iota
+	CredentialsExpired
+	CredentialsValid
+	CredentialsValidationFailed
+)
+
 func (i *Instance) NewRequest(method string, url string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
@@ -35,38 +44,43 @@ func (i *Instance) NewOCSRequest(method string, url string, body io.Reader) (*ht
 	return req, err
 }
 
-func (i *Instance) ValidateCredentials(credentials AuthCredentials) (bool, error) {
+func (i *Instance) ValidateCredentials(credentials AuthCredentials) (CredentialValidationResult, error) {
 	if credentials.LoginName == "" {
-		return false, nil
+		return CredentialsInvalid, nil
 	}
 
+	// /ocs/v1.php/cloud/capabilities
 	req, err := i.NewOCSRequest(http.MethodGet, i.baseUrl+"/ocs/v2.php/apps/user_status/api/v1/user_status", bytes.NewReader([]byte("")))
 	if err != nil {
-		return false, err
+		return CredentialsValidationFailed, err
 	}
 	req.SetBasicAuth(credentials.LoginName, credentials.AppPassword)
 
 	resp, err := i.client.Do(req)
 	if err != nil {
-		return false, err
+		return CredentialsValidationFailed, err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 401 {
-		return false, nil
+		return CredentialsExpired, nil
 	} else if resp.StatusCode != 200 {
-		return false, errors.New("unknown server response")
+		return CredentialsValidationFailed, errors.New("unknown server response")
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return false, err
+		return CredentialsValidationFailed, err
 	}
 
 	ncRes := NextcloudOCSBaseResult[interface{}]{}
 	if err = json.Unmarshal(body, &ncRes); err != nil {
-		return false, err
+		return CredentialsValidationFailed, err
 	}
 
-	return ncRes.OCS.Meta.Status == "ok", nil
+	if ncRes.OCS.Meta.Status == "ok" {
+		return CredentialsValid, nil
+	} else {
+		return CredentialsExpired, nil
+	}
 }

@@ -4,6 +4,7 @@ go 1.19
 
 require (
 	fyne.io/fyne/v2 v2.3.1-0.20230130044922-a0d92e9c64b0
+	fyne.io/systray v1.10.1-0.20230126002350-01b67b43df38
 	github.com/billgraziano/dpapi v0.4.0
 	github.com/pelletier/go-toml/v2 v2.0.6
 	github.com/pkg/browser v0.0.0-20210911075715-681adbf594b8
@@ -11,7 +12,6 @@ require (
 )
 
 require (
-	fyne.io/systray v1.10.1-0.20230126002350-01b67b43df38 // indirect
 	github.com/benoitkugler/textlayout v0.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fredbi/uri v0.1.0 // indirect

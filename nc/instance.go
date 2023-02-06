@@ -9,13 +9,16 @@ type Instance struct {
 	client      *http.Client
 	userAgent   string
 	credentials AuthCredentials
+
+	credentialUpdateProc func(AuthCredentials)
 }
 
 func NewInstance(url string) *Instance {
 	return &Instance{
-		baseUrl:   url,
-		client:    http.DefaultClient,
-		userAgent: "Nextcloud Talk Client (GoTalk)",
+		baseUrl:              url,
+		client:               http.DefaultClient,
+		userAgent:            "Nextcloud Talk Client (GoTalk)",
+		credentialUpdateProc: nil,
 	}
 }
 
@@ -25,6 +28,13 @@ func (i *Instance) GetBaseURL() string {
 
 func (i *Instance) SetCredentials(credentials AuthCredentials) {
 	i.credentials = credentials
+	if i.credentialUpdateProc != nil {
+		i.credentialUpdateProc(credentials)
+	}
+}
+
+func (i *Instance) OnCredentialsUpdated(credUpdateProc func(AuthCredentials)) {
+	i.credentialUpdateProc = credUpdateProc
 }
 
 func (i *Instance) GetCredentials() AuthCredentials {

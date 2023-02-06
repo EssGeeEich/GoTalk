@@ -2,13 +2,13 @@ package main
 
 import (
 	"log"
-	"time"
+	"os"
+	"sort"
+	"sync"
 
 	"GoTalk/nc"
-	"GoTalk/ncmonitor"
 	"GoTalk/settings"
 
-	"github.com/billgraziano/dpapi"
 	"gopkg.in/toast.v1"
 
 	"fyne.io/fyne/v2"
@@ -17,74 +17,64 @@ import (
 	"fyne.io/systray"
 )
 
-type conversationLocalStorage struct {
-	lastNotificationTimestamp time.Time
-	lastReadMessageId         int64
-}
-
 var (
-	settingsManager *settings.SettingsManager[UserSettings, OrgSettings]
-	user            *UserSettings
-	org             *OrgSettings
-	convLocalData   map[int64]conversationLocalStorage
+	cache *Cache
+	user  *UserSettings
+	org   *OrgSettings
+
+	setInstanceLoginMenuOption func(instance string, callback func())
 )
 
-func sendMessageNotification(title string, message string, url string) error {
+func sendMessageNotification(instance string, title string, message string, url string, playAudio bool) error {
+	if !user.ShowNotifications {
+		return nil
+	}
+
+	var err error
+
+	// cacheInstance, cacheInstanceOk := cache.InstanceData[instance]
+	orgInstance, orgInstanceOk := org.InstanceData[instance]
+
+	// Determine which icon should be displayed
+	var icon string
+	if orgInstanceOk && orgInstance.NotificationAppIcon != "" {
+		icon = orgInstance.NotificationAppIcon
+	} else {
+		if icon, err = os.Executable(); err != nil {
+			return err
+		}
+
+		icon = icon + string(os.PathSeparator) + "DefaultIcon.png"
+	}
+
 	notification := toast.Notification{
 		AppID:               "Nextcloud Talk",
 		Title:               title,
 		Message:             message,
-		Audio:               toast.Silent,
+		Audio:               toast.IM,
 		ActivationArguments: url,
-		Icon:                "DefaultIcon.png",
+		Icon:                icon,
 	}
 
-	if user.PlayAudio {
-		notification.Audio = toast.IM
+	// Determine whether the user wants audio for this instance
+	if !user.PlayAudio || !playAudio {
+		notification.Audio = toast.Silent
 	}
 
-	if err := notification.Push(); err != nil {
+	if err = notification.Push(); err != nil {
 		return err
 	}
 
 	return nil
 }
 
-func runNextcloudMonitor() error {
-	timer := time.NewTicker(5 * time.Second)
+func startNextcloudMonitor(wg *sync.WaitGroup, closeChan chan interface{}) error {
+	for instanceName := range org.InstanceData {
 
-	var ncCredentials nc.AuthCredentials
-
-	{
-		var decPassword string
-		var err error
-		if decPassword, err = dpapi.Decrypt(user.AppPassword); err != nil {
-			decPassword = ""
-		}
-
-		ncCredentials = nc.AuthCredentials{
-			LoginName:   user.Username,
-			AppPassword: decPassword,
-		}
-	}
-
-	ncInstance := nc.NewInstance(org.NextcloudInstance)
-	ncInstance.SetCredentials(ncCredentials)
-
-	ncMonitor := ncmonitor.NewMonitor(ncInstance)
-	ncMonitor.SetNotificationSender(sendMessageNotification)
-
-	for range timer.C {
-		needsLogin, err := ncMonitor.NeedsLogin()
-		if err != nil {
-			return err
-		}
-
-		if needsLogin {
-			// ...
-		} else if err := ncMonitor.ProcessMessages(); err != nil {
-			return err
-		}
+		// Run the actual Monitor loop
+		wg.Add(1)
+		internalMonitor := newMonitorProc(instanceName)
+		go internalMonitor.run(wg, closeChan)
 	}
 
 	return nil
@@ -92,10 +82,11 @@ func runNextcloudMonitor() error {
 
 func main() {
 	var err error
-	convLocalData = make(map[int64]conversationLocalStorage)
 	settingsManager := settings.NewSettingsManager(
 		"SGH",
 		"GoTalk",
+
+		Cache{},
 
 		// Default User Settings
 		UserSettings{
@@ -105,123 +96,176 @@ func main() {
 
 		// Default Org Settings
 		OrgSettings{
-			CanAddInstances:  false,
 			MessageCheckTime: 5,
 		},
 	)
 
-	if user, org, err = settingsManager.Load(); err != nil {
+	if cache, user, org, err = settingsManager.Load(); err != nil {
 		log.Fatal(err)
 		return
 	}
 
+	if cache.InstanceData == nil {
+		cache.InstanceData = make(map[string]InstanceCache)
+	}
+
+	if user.InstanceData == nil {
+		user.InstanceData = make(map[string]UserInstanceSettings)
+	}
+
+	if org.InstanceData == nil {
+		org.InstanceData = make(map[string]OrgInstanceSettings)
+	}
+
+	for instanceName := range org.InstanceData {
+		if _, ok := user.InstanceData[instanceName]; !ok {
+			// Sensible default user settings for a new instance
+			user.InstanceData[instanceName] = UserInstanceSettings{
+				NotificationSettings: nc.NotificationSettings{
+					ShowUserNotifications:    true,
+					ShowGroupNotifications:   true,
+					ShowBotNotifications:     true,
+					ShowGuestNotifications:   true,
+					ShowBridgedNotifications: true,
+					ShowMutedNotifications:   false,
+					PlayAudio:                true,
+				},
+			}
+		}
+
+		if _, ok := cache.InstanceData[instanceName]; !ok {
+			cache.InstanceData[instanceName] = InstanceCache{}
+		}
+	}
+
 	defer func() {
-		if err := settingsManager.Save(user, org); err != nil {
+		if err := settingsManager.Save(cache, user, org); err != nil {
 			log.Fatal(err)
 			return
 		}
 	}()
 
-	icon, _ := fyne.LoadResourceFromPath("DefaultIcon.ico")
+	iconPath := "DefaultIcon.ico"
+	if org.SystemTrayAppIcon != "" {
+		iconPath = org.SystemTrayAppIcon
+	}
+
+	icon, _ := fyne.LoadResourceFromPath(iconPath)
 	a := app.New()
 
 	if desk, ok := a.(desktop.App); ok {
-		var menu *fyne.Menu
-		var showUserNotifications *fyne.MenuItem
-		var showGroupNotifications *fyne.MenuItem
-		var showBotNotifications *fyne.MenuItem
-		var showGuestNotifications *fyne.MenuItem
-		var showBridgedNotifications *fyne.MenuItem
-		var showMutedNotifications *fyne.MenuItem
-		var playAudioSound *fyne.MenuItem
-
-		updateSettings := func() {
-			user.ShowUserNotifications = showUserNotifications.Checked
-			user.ShowGroupNotifications = showGroupNotifications.Checked
-			user.ShowBotNotifications = showBotNotifications.Checked
-			user.ShowGuestNotifications = showGuestNotifications.Checked
-			user.ShowBridgedNotifications = showBridgedNotifications.Checked
-			user.ShowMutedNotifications = showMutedNotifications.Checked
-			user.PlayAudio = playAudioSound.Checked
+		// Compute a sorted list of all the available instances
+		availableInstances := make([]string, 0, len(org.InstanceData))
+		for k := range org.InstanceData {
+			availableInstances = append(availableInstances, k)
 		}
+		sort.Strings(availableInstances)
 
-		readbackSettings := func() {
-			showUserNotifications.Checked = user.ShowUserNotifications
-			showGroupNotifications.Checked = user.ShowGroupNotifications
-			showBotNotifications.Checked = user.ShowBotNotifications
-			showGuestNotifications.Checked = user.ShowGuestNotifications
-			showBridgedNotifications.Checked = user.ShowBridgedNotifications
-			showMutedNotifications.Checked = user.ShowMutedNotifications
-			playAudioSound.Checked = user.PlayAudio
+		// Create the main menu
+		var menu *fyne.Menu = fyne.NewMenu("GoTalk")
 
-			if menu != nil {
-				menu.Refresh()
+		// Create the various submenus
+		for _, instance := range availableInstances {
+			var showUserNotifications *fyne.MenuItem
+			var showGroupNotifications *fyne.MenuItem
+			var showBotNotifications *fyne.MenuItem
+			var showGuestNotifications *fyne.MenuItem
+			var showBridgedNotifications *fyne.MenuItem
+			var showMutedNotifications *fyne.MenuItem
+			var playAudioSound *fyne.MenuItem
+
+			updateSettings := func() {
+				data := user.InstanceData[instance]
+				data.NotificationSettings.ShowUserNotifications = showUserNotifications.Checked
+				data.NotificationSettings.ShowGroupNotifications = showGroupNotifications.Checked
+				data.NotificationSettings.ShowBotNotifications = showBotNotifications.Checked
+				data.NotificationSettings.ShowGuestNotifications = showGuestNotifications.Checked
+				data.NotificationSettings.ShowBridgedNotifications = showBridgedNotifications.Checked
+				data.NotificationSettings.ShowMutedNotifications = showMutedNotifications.Checked
+				data.NotificationSettings.PlayAudio = playAudioSound.Checked
+				user.InstanceData[instance] = data
 			}
+
+			showUserNotifications = fyne.NewMenuItem("Show User Notifications", func() {
+				showUserNotifications.Checked = !showUserNotifications.Checked
+				updateSettings()
+				menu.Refresh()
+			})
+			showGroupNotifications = fyne.NewMenuItem("Show Group Notifications", func() {
+				showGroupNotifications.Checked = !showGroupNotifications.Checked
+				updateSettings()
+				menu.Refresh()
+			})
+			showBotNotifications = fyne.NewMenuItem("Show Bot Notifications", func() {
+				showBotNotifications.Checked = !showBotNotifications.Checked
+				updateSettings()
+				menu.Refresh()
+			})
+			showGuestNotifications = fyne.NewMenuItem("Show Guest Notifications", func() {
+				showGuestNotifications.Checked = !showGuestNotifications.Checked
+				updateSettings()
+				menu.Refresh()
+			})
+			showBridgedNotifications = fyne.NewMenuItem("Show Bridged Notifications", func() {
+				showBridgedNotifications.Checked = !showBridgedNotifications.Checked
+				updateSettings()
+				menu.Refresh()
+			})
+			showMutedNotifications = fyne.NewMenuItem("Show Muted Notifications", func() {
+				showMutedNotifications.Checked = !showMutedNotifications.Checked
+				updateSettings()
+				menu.Refresh()
+			})
+			playAudioSound = fyne.NewMenuItem("Notification Sound", func() {
+				playAudioSound.Checked = !playAudioSound.Checked
+				updateSettings()
+				menu.Refresh()
+			})
+
+			data := user.InstanceData[instance]
+			showUserNotifications.Checked = data.NotificationSettings.ShowUserNotifications
+			showGroupNotifications.Checked = data.NotificationSettings.ShowGroupNotifications
+			showBotNotifications.Checked = data.NotificationSettings.ShowBotNotifications
+			showGuestNotifications.Checked = data.NotificationSettings.ShowGuestNotifications
+			showBridgedNotifications.Checked = data.NotificationSettings.ShowBridgedNotifications
+			showMutedNotifications.Checked = data.NotificationSettings.ShowMutedNotifications
+			playAudioSound.Checked = data.NotificationSettings.PlayAudio
+
+			submenu := fyne.NewMenuItem(instance, func() {})
+			submenu.ChildMenu = fyne.NewMenu(
+				instance,
+				showUserNotifications,
+				showGroupNotifications,
+				showBotNotifications,
+				showGuestNotifications,
+				showBridgedNotifications,
+				fyne.NewMenuItemSeparator(),
+				showMutedNotifications,
+				playAudioSound,
+			)
+
+			menu.Items = append(menu.Items, submenu)
 		}
-
-		showUserNotifications = fyne.NewMenuItem("Show User Notifications", func() {
-			showUserNotifications.Checked = !showUserNotifications.Checked
-			updateSettings()
-			menu.Refresh()
-		})
-		showGroupNotifications = fyne.NewMenuItem("Show Group Notifications", func() {
-			showGroupNotifications.Checked = !showGroupNotifications.Checked
-			updateSettings()
-			menu.Refresh()
-		})
-		showBotNotifications = fyne.NewMenuItem("Show Bot Notifications", func() {
-			showBotNotifications.Checked = !showBotNotifications.Checked
-			updateSettings()
-			menu.Refresh()
-		})
-		showGuestNotifications = fyne.NewMenuItem("Show Guest Notifications", func() {
-			showGuestNotifications.Checked = !showGuestNotifications.Checked
-			updateSettings()
-			menu.Refresh()
-		})
-		showBridgedNotifications = fyne.NewMenuItem("Show Bridged Notifications", func() {
-			showBridgedNotifications.Checked = !showBridgedNotifications.Checked
-			updateSettings()
-			menu.Refresh()
-		})
-		showMutedNotifications = fyne.NewMenuItem("Show Muted Notifications", func() {
-			showMutedNotifications.Checked = !showMutedNotifications.Checked
-			updateSettings()
-			menu.Refresh()
-		})
-		playAudioSound = fyne.NewMenuItem("Notification Sound", func() {
-			playAudioSound.Checked = !playAudioSound.Checked
-			updateSettings()
-			menu.Refresh()
-		})
-
-		readbackSettings()
-
-		menu = fyne.NewMenu(
-			"GoTalk",
-			showUserNotifications,
-			showGroupNotifications,
-			showBotNotifications,
-			showGuestNotifications,
-			showBridgedNotifications,
-			fyne.NewMenuItemSeparator(),
-			showMutedNotifications,
-			playAudioSound,
-		)
 
 		desk.SetSystemTrayMenu(menu)
 		desk.SetSystemTrayIcon(icon)
 	}
 
+	var wg sync.WaitGroup
+	var closeChan chan interface{} = make(chan interface{})
+
+	wg.Add(1)
 	go func() {
-		err := runNextcloudMonitor()
+		defer wg.Done()
+		err := startNextcloudMonitor(&wg, closeChan)
 		if err != nil {
 			log.Print(err)
+			a.Quit()
 		}
-		a.Quit()
 	}()
 
 	defer systray.Quit()
+	defer close(closeChan)
 
 	a.Run()
 }

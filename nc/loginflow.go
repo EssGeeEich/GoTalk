@@ -24,6 +24,10 @@ type AuthCredentials struct {
 	AppPassword string
 }
 
+func (f *LoginFlow) IsRunning() bool {
+	return f.token == ""
+}
+
 func (f *LoginFlow) WaitFlow() (*AuthCredentials, error) {
 	timer := time.NewTicker(5 * time.Second)
 
@@ -66,10 +70,42 @@ func (f *LoginFlow) Check() (*AuthCredentials, error) {
 		return nil, err
 	}
 
+	f.endpoint = ""
+	f.token = ""
+
 	return &AuthCredentials{
 		LoginName:   ncRes.LoginName,
 		AppPassword: ncRes.AppPassword,
 	}, nil
+}
+
+func (f *LoginFlow) StartManual() (string, error) {
+	req, err := f.instance.NewRequest(http.MethodPost, f.instance.baseUrl+"/index.php/login/v2", bytes.NewReader([]byte("")))
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := f.instance.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	ncFlow := nextcloudLoginFlow{}
+	if err = json.Unmarshal(body, &ncFlow); err != nil {
+		return "", err
+	}
+
+	f.endpoint = ncFlow.Poll.Endpoint
+	f.token = ncFlow.Poll.Token
+	f.requestStart = time.Now()
+
+	return ncFlow.Login, nil
 }
 
 func (f *LoginFlow) Start() error {

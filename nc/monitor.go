@@ -1,29 +1,60 @@
-package ncmonitor
+package nc
 
-import (
-	"GoTalk/nc"
-)
-
-type NotificationSender func(title string, message string, url string) error
-
-type Monitor struct {
-	notif NotificationSender
+type NotificationSettings struct {
+	ShowUserNotifications    bool // Whether to show notifications for regular 1-on-1 chats
+	ShowGroupNotifications   bool // Whether to show notifications for group chats or circles
+	ShowBotNotifications     bool // Whether to show notifications for bot chats
+	ShowGuestNotifications   bool // Whether to show notifications for guest chats
+	ShowBridgedNotifications bool // Whether to show notifications for bridged chats
+	ShowMutedNotifications   bool // Force notifications to be shown even if the conversation was muted
+	PlayAudio                bool // Plays a notification sound
 }
 
-func NewMonitor(instance *nc.Instance) *Monitor {
+type NotificationSender func(instance string, title string, message string, url string, playAudio bool) error
+type NotificationSettingsGetter func() NotificationSettings
 
+type Monitor struct {
+	notificationSender NotificationSender
+	settingsGetter     NotificationSettingsGetter
+}
+
+func NewMonitor(instance *Instance) *Monitor {
+	return &Monitor{
+		notificationSender: nil,
+		settingsGetter:     nil,
+	}
 }
 
 func (m *Monitor) SetNotificationSender(sender NotificationSender) {
-	m.notif = sender
+	m.notificationSender = sender
+}
+
+func (m *Monitor) SetNotificationSettingsGetter(getter NotificationSettingsGetter) {
+	m.settingsGetter = getter
+}
+
+func (m *Monitor) getNotificationSettings() NotificationSettings {
+	if m.settingsGetter != nil {
+		return m.settingsGetter()
+	}
+
+	return NotificationSettings{
+		ShowUserNotifications:    true,
+		ShowGroupNotifications:   true,
+		ShowBotNotifications:     true,
+		ShowGuestNotifications:   true,
+		ShowBridgedNotifications: true,
+		ShowMutedNotifications:   false,
+		PlayAudio:                true,
+	}
 }
 
 func (m *Monitor) NeedsLogin() (bool, error) {
-
+	return true, nil
 }
 
 func (m *Monitor) ProcessMessages() error {
-
+	return nil
 }
 
 /*
