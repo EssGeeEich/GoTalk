@@ -2,6 +2,7 @@ package nc
 
 import (
 	"net/http"
+	"time"
 )
 
 type Instance struct {
@@ -43,6 +44,7 @@ func (i *Instance) GetCredentials() AuthCredentials {
 
 func (i *Instance) NewLoginFlow() *LoginFlow {
 	return &LoginFlow{
-		instance: i,
+		instance:   i,
+		updateTime: time.Second * 5,
 	}
 }
