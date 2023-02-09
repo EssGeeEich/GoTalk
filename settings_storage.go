@@ -2,17 +2,17 @@ package main
 
 import "GoTalk/nc"
 
-type StartupType int64
+type LoginType int64
 
 const (
-	// Don't send a login prompt
-	NoLoginPrompt StartupType = iota
-
 	// Send one notification to remind the user to log in
-	NotificationLogin
+	LoginWithNotification LoginType = iota
 
 	// Open the login page right away
-	ImmediateLogin
+	LoginImmediately
+
+	// Start the Login Flow with a right-click option
+	LoginWithContextMenu
 )
 
 type InstanceCache struct {
@@ -36,9 +36,11 @@ type UserSettings struct {
 }
 
 type OrgInstanceSettings struct {
-	InstanceURL         string      // URL pointing to the Nextcloud instance
-	Startup             StartupType // Chooses how to handle the application startup when the user isn't logged in yet
-	NotificationAppIcon string      // Custom App Icon. Uses DefaultIcon.png otherwise. Should be a full path pointing to a PNG file.
+	InstanceURL         string    // URL pointing to the Nextcloud instance
+	Login               LoginType // Chooses how to handle the application startup when the user isn't logged in yet
+	NotificationAppIcon string    // Custom App Icon. Uses DefaultIcon.png otherwise. Should be a full path pointing to a PNG file.
+
+	setInstanceLoginMenuOption func(callback func())
 }
 
 type OrgSettings struct {

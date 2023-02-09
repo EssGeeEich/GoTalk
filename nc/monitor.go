@@ -1,5 +1,7 @@
 package nc
 
+import "time"
+
 type NotificationSettings struct {
 	ShowUserNotifications    bool // Whether to show notifications for regular 1-on-1 chats
 	ShowGroupNotifications   bool // Whether to show notifications for group chats or circles
@@ -13,15 +15,23 @@ type NotificationSettings struct {
 type NotificationSender func(instance string, title string, message string, url string, playAudio bool) error
 type NotificationSettingsGetter func() NotificationSettings
 
+type conversationLocalStorage struct {
+	lastNotificationTimestamp time.Time
+	lastReadMessageId         int64
+}
 type Monitor struct {
+	ncInstance         *Instance
 	notificationSender NotificationSender
 	settingsGetter     NotificationSettingsGetter
+	conversationData   map[int64]conversationLocalStorage
 }
 
 func NewMonitor(instance *Instance) *Monitor {
 	return &Monitor{
+		ncInstance:         instance,
 		notificationSender: nil,
 		settingsGetter:     nil,
+		conversationData:   make(map[int64]conversationLocalStorage),
 	}
 }
 
@@ -49,86 +59,25 @@ func (m *Monitor) getNotificationSettings() NotificationSettings {
 	}
 }
 
-func (m *Monitor) NeedsLogin() (bool, error) {
-	return true, nil
-}
-
-func (m *Monitor) ProcessMessages() error {
+func (m *Monitor) sendMessageNotification(title string, message string, url string, playAudio bool) error {
+	if m.notificationSender != nil {
+		return m.notificationSender(m.ncInstance.instanceName, title, message, url, playAudio)
+	}
 	return nil
 }
 
-/*
-if !nextcloudInstanceValid {
-	nextcloudInstanceValid, err = startNextcloudInstance()
-	if err != nil {
-		return err
+func (m *Monitor) ProcessMessages() (APIResponse, error) {
+	conversations, resp, err := m.ncInstance.GetUserConversations()
+	if resp != APISuccess || err != nil {
+		return resp, err
 	}
 
-	if err = mySettings.Save("GoTalk.toml"); err != nil {
-		return err
-	}
-} else {
-	nextcloudInstanceValid, err = updateNextcloudInstance()
-	if err != nil {
-		return err
-	}
-}
-
-func startNextcloudInstance() (bool, error) {
-	selCredentials := &nc.AuthCredentials{
-		LoginName:   mySettings.Get().Username,
-		AppPassword: mySettings.Get().AppPassword,
-	}
-
-	result, err := ncInstance.ValidateCredentials(*selCredentials)
-	if err != nil {
-		return false, err
-	}
-
-	if result {
-		ncInstance.SetCredentials(*selCredentials)
-		return true, nil
-	}
-
-	ncLoginFlow := ncInstance.NewLoginFlow()
-	if err := ncLoginFlow.Start(); err != nil {
-		return false, err
-	}
-
-	if selCredentials, err = ncLoginFlow.WaitFlow(); err != nil {
-		return false, err
-	}
-
-	if result, err = ncInstance.ValidateCredentials(*selCredentials); err != nil {
-		return false, err
-	}
-
-	if result {
-		s := mySettings.Get()
-		s.Username = selCredentials.LoginName
-		s.AppPassword = selCredentials.AppPassword
-		mySettings.Set(s)
-
-		ncInstance.SetCredentials(*selCredentials)
-		return true, nil
-	}
-
-	return false, errors.New("login flow didn't respond with a valid token")
-}
-
-func updateNextcloudInstance() (bool, error) {
-	conversations, err := ncInstance.GetUserConversations()
-	if err != nil {
-		s, _ := ncInstance.ValidateCredentials(ncInstance.GetCredentials())
-		return s, err
-	}
-
-	activeSettings := mySettings.Get()
+	activeSettings := m.getNotificationSettings()
 
 	for _, conv := range *conversations {
 		var convLocal conversationLocalStorage
 		var ok bool
-		if convLocal, ok = convLocalData[conv.Id]; !ok {
+		if convLocal, ok = m.conversationData[conv.Id]; !ok {
 			convLocal = conversationLocalStorage{
 				lastNotificationTimestamp: time.Unix(0, 0),
 				lastReadMessageId:         0,
@@ -153,12 +102,11 @@ func updateNextcloudInstance() (bool, error) {
 			if time.Since(convLocal.lastNotificationTimestamp).Minutes() > 5 || conv.LastReadMessage != convLocal.lastReadMessageId {
 				convLocal.lastNotificationTimestamp = time.Now()
 				convLocal.lastReadMessageId = conv.LastReadMessage
-				convLocalData[conv.Id] = convLocal
-				defer sendMessageNotification(conv.DisplayName, conv.LastMessage.Message, ncInstance.GetBaseURL()+"/call/"+conv.LastMessage.Token, activeSettings.PlayAudio)
+				m.conversationData[conv.Id] = convLocal
+				defer m.sendMessageNotification(conv.DisplayName, conv.LastMessage.Message, m.ncInstance.GetBaseURL()+"/call/"+conv.LastMessage.Token, activeSettings.PlayAudio)
 			}
 		}
 	}
 
-	return true, nil
+	return APISuccess, nil
 }
-*/

@@ -21,8 +21,6 @@ var (
 	cache *Cache
 	user  *UserSettings
 	org   *OrgSettings
-
-	setInstanceLoginMenuOption func(instance string, callback func())
 )
 
 func sendMessageNotification(instance string, title string, message string, url string, playAudio bool) error {
@@ -239,10 +237,28 @@ func main() {
 				showBotNotifications,
 				showGuestNotifications,
 				showBridgedNotifications,
-				fyne.NewMenuItemSeparator(),
+				//fyne.NewMenuItemSeparator(),
 				showMutedNotifications,
 				playAudioSound,
 			)
+
+			coreItems := submenu.ChildMenu.Items
+			loginItem := fyne.NewMenuItem("Log In", func() {})
+
+			inst := org.InstanceData[instance]
+			inst.setInstanceLoginMenuOption = func(callback func()) {
+				if callback == nil {
+					loginItem.Action = nil
+					submenu.ChildMenu.Items = coreItems
+					menu.Refresh()
+				} else {
+					submenu.ChildMenu.Items = coreItems
+					loginItem.Action = callback
+					submenu.ChildMenu.Items = append(submenu.ChildMenu.Items, loginItem)
+					menu.Refresh()
+				}
+			}
+			org.InstanceData[instance] = inst
 
 			menu.Items = append(menu.Items, submenu)
 		}

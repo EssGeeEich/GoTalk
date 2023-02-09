@@ -2,21 +2,24 @@ package nc
 
 import (
 	"net/http"
+	"strings"
 	"time"
 )
 
 type Instance struct {
-	baseUrl     string
-	client      *http.Client
-	userAgent   string
-	credentials AuthCredentials
+	instanceName string
+	baseUrl      string
+	client       *http.Client
+	userAgent    string
+	credentials  AuthCredentials
 
 	credentialUpdateProc func(AuthCredentials)
 }
 
-func NewInstance(url string) *Instance {
+func NewInstance(instanceName string, url string) *Instance {
 	return &Instance{
-		baseUrl:              url,
+		instanceName:         instanceName,
+		baseUrl:              strings.TrimRight(url, "/"),
 		client:               http.DefaultClient,
 		userAgent:            "Nextcloud Talk Client (GoTalk)",
 		credentialUpdateProc: nil,

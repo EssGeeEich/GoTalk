@@ -9,8 +9,7 @@
             "type": "go",
             "request": "launch",
             "mode": "auto",
-            "program": "${workspaceFolder}",
-            "args": ["-nc=https://cloud.s-gg.dev"]
+            "program": "${workspaceFolder}"
         }
     ]
 }

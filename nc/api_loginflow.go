@@ -6,13 +6,12 @@ import (
 	"io"
 	"net/http"
 	"time"
-
-	"github.com/pkg/browser"
 )
 
 type LoginFlow struct {
 	instance         *Instance
 	chanWaitFinished chan interface{}
+	chanCancel       chan interface{}
 	endpoint         string
 	token            string
 	requestStart     time.Time
@@ -24,39 +23,16 @@ type LoginFlow struct {
 	err         error
 }
 
-func (f *LoginFlow) Pending() bool {
-	select {
-	case <-f.chanWaitFinished:
-		return false
-	default:
-		return true
-	}
-}
-
-func (f *LoginFlow) Check() (APIResponse, LoginResult, *AuthCredentials, error) {
-	select {
-	case <-f.chanWaitFinished:
-		return f.response, f.result, f.credentials, f.err
-	default:
-		return APISuccess, LoginPending, nil, nil
-	}
-}
-
-func (f *LoginFlow) WaitFlowInfinite() (APIResponse, LoginResult, *AuthCredentials, error) {
+func (f *LoginFlow) Wait() (APIResponse, LoginResult, *AuthCredentials, error) {
 	<-f.chanWaitFinished
 	return f.response, f.result, f.credentials, f.err
 }
 
-func (f *LoginFlow) WaitFlow(timeout time.Duration) (APIResponse, LoginResult, *AuthCredentials, error) {
-	select {
-	case <-f.chanWaitFinished:
-		return f.response, f.result, f.credentials, f.err
-	case <-time.After(timeout):
-		return APISuccess, LoginPending, nil, nil
-	}
+func (f *LoginFlow) Cancel() {
+	close(f.chanCancel)
 }
 
-func (f *LoginFlow) StartManual() (APIResponse, string, error) {
+func (f *LoginFlow) Start() (APIResponse, string, error) {
 	req, err := f.instance.NewRequest(http.MethodPost, f.instance.baseUrl+"/index.php/login/v2", bytes.NewReader([]byte("")))
 	if err != nil {
 		return APIUnreachable, "", err
@@ -88,6 +64,7 @@ func (f *LoginFlow) StartManual() (APIResponse, string, error) {
 	f.token = ncFlow.Poll.Token
 
 	f.chanWaitFinished = make(chan interface{})
+	f.chanCancel = make(chan interface{})
 	f.response = APIUnreachable
 	f.result = LoginFailed
 	f.credentials = nil
@@ -98,27 +75,20 @@ func (f *LoginFlow) StartManual() (APIResponse, string, error) {
 	return APISuccess, ncFlow.Login, nil
 }
 
-func (f *LoginFlow) Start() (APIResponse, error) {
-	r, s, err := f.StartManual()
-	if err != nil {
-		return r, err
-	}
-
-	if err = browser.OpenURL(s); err != nil {
-		return APISuccess, err
-	}
-
-	return APISuccess, nil
-}
-
 func (f *LoginFlow) runCheck() {
 	defer close(f.chanWaitFinished)
 
 	timer := time.NewTicker(f.updateTime)
 	defer timer.Stop()
 
-	for range timer.C {
-		if !f.runSingleCheck() {
+	for {
+		select {
+		case <-timer.C:
+			if !f.runSingleCheck() {
+				close(f.chanCancel)
+				return
+			}
+		case <-f.chanCancel:
 			return
 		}
 	}
