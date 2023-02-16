@@ -31,8 +31,8 @@ type UserInstanceSettings struct {
 type UserSettings struct {
 	InstanceData map[string]UserInstanceSettings // Nextcloud instances that the user logged in to
 
-	PlayAudio         bool // Global toggle for muting audio
-	ShowNotifications bool // Global toggle for preventing notifications
+	ShowNotifications      bool // Global toggle for preventing notifications
+	PlayNotificationSounds bool // Global toggle for muting audio
 }
 
 type OrgInstanceSettings struct {

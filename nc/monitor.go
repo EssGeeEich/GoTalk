@@ -9,10 +9,11 @@ type NotificationSettings struct {
 	ShowGuestNotifications   bool // Whether to show notifications for guest chats
 	ShowBridgedNotifications bool // Whether to show notifications for bridged chats
 	ShowMutedNotifications   bool // Force notifications to be shown even if the conversation was muted
-	PlayAudio                bool // Plays a notification sound
+	PlayNotificationSounds   bool // Plays a notification sound
 }
 
 type NotificationSender func(instance string, title string, message string, url string, playAudio bool) error
+type NotificationCountSetter func(instance string, unfilteredCount uint, filteredCount uint) error
 type NotificationSettingsGetter func() NotificationSettings
 
 type conversationLocalStorage struct {
@@ -20,10 +21,11 @@ type conversationLocalStorage struct {
 	lastReadMessageId         int64
 }
 type Monitor struct {
-	ncInstance         *Instance
-	notificationSender NotificationSender
-	settingsGetter     NotificationSettingsGetter
-	conversationData   map[int64]conversationLocalStorage
+	ncInstance              *Instance
+	notificationSender      NotificationSender
+	notificationCountSetter NotificationCountSetter
+	settingsGetter          NotificationSettingsGetter
+	conversationData        map[int64]conversationLocalStorage
 }
 
 func NewMonitor(instance *Instance) *Monitor {
@@ -37,6 +39,10 @@ func NewMonitor(instance *Instance) *Monitor {
 
 func (m *Monitor) SetNotificationSender(sender NotificationSender) {
 	m.notificationSender = sender
+}
+
+func (m *Monitor) SetNotificationCountSetter(setter NotificationCountSetter) {
+	m.notificationCountSetter = setter
 }
 
 func (m *Monitor) SetNotificationSettingsGetter(getter NotificationSettingsGetter) {
@@ -55,7 +61,7 @@ func (m *Monitor) getNotificationSettings() NotificationSettings {
 		ShowGuestNotifications:   true,
 		ShowBridgedNotifications: true,
 		ShowMutedNotifications:   false,
-		PlayAudio:                true,
+		PlayNotificationSounds:   true,
 	}
 }
 
@@ -74,6 +80,8 @@ func (m *Monitor) ProcessMessages() (APIResponse, error) {
 
 	activeSettings := m.getNotificationSettings()
 
+	var filteredCount uint = 0
+	var unfilteredCount uint = 0
 	for _, conv := range *conversations {
 		var convLocal conversationLocalStorage
 		var ok bool
@@ -85,6 +93,7 @@ func (m *Monitor) ProcessMessages() (APIResponse, error) {
 		}
 
 		if conv.UnreadMessages > 0 {
+			unfilteredCount += 1
 			if conv.NotificationLevel == 3 && !activeSettings.ShowMutedNotifications {
 				continue
 			} else if (conv.ActorType == "bots" || conv.LastMessage.ActorType == "bots") && !activeSettings.ShowBotNotifications {
@@ -98,14 +107,19 @@ func (m *Monitor) ProcessMessages() (APIResponse, error) {
 			} else if (conv.Type == 2 || conv.Type == 3) && !activeSettings.ShowGroupNotifications {
 				continue
 			}
+			filteredCount += 1
 
 			if time.Since(convLocal.lastNotificationTimestamp).Minutes() > 5 || conv.LastReadMessage != convLocal.lastReadMessageId {
+				textPreview := conv.LastMessage.format()
 				convLocal.lastNotificationTimestamp = time.Now()
 				convLocal.lastReadMessageId = conv.LastReadMessage
 				m.conversationData[conv.Id] = convLocal
-				defer m.sendMessageNotification(conv.DisplayName, conv.LastMessage.Message, m.ncInstance.GetBaseURL()+"/call/"+conv.LastMessage.Token, activeSettings.PlayAudio)
+				defer m.sendMessageNotification(conv.DisplayName, textPreview, m.ncInstance.GetBaseURL()+"/call/"+conv.LastMessage.Token, activeSettings.PlayNotificationSounds)
 			}
 		}
+	}
+	if m.notificationCountSetter != nil {
+		m.notificationCountSetter(m.ncInstance.instanceName, unfilteredCount, filteredCount)
 	}
 
 	return APISuccess, nil

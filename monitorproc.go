@@ -58,10 +58,13 @@ func (p *monitorProcData) saveCredentials(cred nc.AuthCredentials) {
 		}
 		p.cache.EncryptedAppPassword = s
 	}
+
+	cache.InstanceData[p.instanceName] = p.cache
+	settingsManager.Save(cache, user, org)
 }
 
 func (p *monitorProcData) getNotificationSettings() nc.NotificationSettings {
-	return p.user.NotificationSettings
+	return user.InstanceData[p.instanceName].NotificationSettings
 }
 
 func (p *monitorProcData) sendNotification(instance string, title string, message string, url string, playAudio bool) error {
@@ -74,8 +77,6 @@ func (p *monitorProcData) run(wg *sync.WaitGroup, closeChan chan interface{}) {
 	p.cache = cache.InstanceData[p.instanceName]
 	p.org = org.InstanceData[p.instanceName]
 	p.user = user.InstanceData[p.instanceName]
-
-	defer func() { cache.InstanceData[p.instanceName] = p.cache }()
 
 	p.ncInstance = nc.NewInstance(p.instanceName, p.org.InstanceURL)
 	p.ncInstance.SetCredentials(p.readCredentials())

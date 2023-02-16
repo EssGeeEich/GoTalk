@@ -1,5 +1,9 @@
 package nc
 
+import (
+	"regexp"
+)
+
 type nextcloudLoginFlow struct {
 	Poll struct {
 		Token    string `json:"token"`
@@ -43,6 +47,41 @@ type NextcloudSpreedMessageData struct {
 	Parent              interface{} `json:"parent,omitempty"`
 	Reactions           interface{} `json:"reactions,omitempty"`
 	ReactionsSelf       []string    `json:"reactionsSelf,omitempty"`
+}
+
+func (msg *NextcloudSpreedMessageData) format() string {
+	parameters, ok := msg.MessageParameters.(map[string]interface{})
+	if ok && parameters != nil {
+		regexReplace := regexp.MustCompile(`{[^{}]*}`)
+		return string(regexReplace.ReplaceAllFunc(
+			[]byte(msg.Message),
+			func(source []byte) []byte {
+				// The following line relies on { and } being only 1 byte long.
+				// If these characters are replaced with longer characters,
+				// the [1 : len(x) - 1] should be applied to the string, not the []byte.
+				interfaceParameter, ok := parameters[string(source[1:len(source)-1])]
+				if !ok {
+					return source
+				}
+				parameter, ok := interfaceParameter.(map[string]interface{})
+				if !ok {
+					return source
+				}
+
+				interfaceName, ok := parameter["name"]
+				if !ok {
+					return source
+				}
+				parameterName, ok := interfaceName.(string)
+				if !ok {
+					return source
+				}
+
+				return []byte(parameterName)
+			},
+		))
+	}
+	return msg.Message
 }
 
 type NextcloudSpreedConversationData struct {

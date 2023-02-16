@@ -21,6 +21,8 @@ var (
 	cache *Cache
 	user  *UserSettings
 	org   *OrgSettings
+
+	settingsManager *settings.SettingsManager[Cache, UserSettings, OrgSettings]
 )
 
 func sendMessageNotification(instance string, title string, message string, url string, playAudio bool) error {
@@ -52,10 +54,13 @@ func sendMessageNotification(instance string, title string, message string, url 
 		Audio:               toast.IM,
 		ActivationArguments: url,
 		Icon:                icon,
+		Actions: []toast.Action{
+			{Type: "protocol", Label: "Open", Arguments: url},
+		},
 	}
 
 	// Determine whether the user wants audio for this instance
-	if !user.PlayAudio || !playAudio {
+	if !user.PlayNotificationSounds || !playAudio {
 		notification.Audio = toast.Silent
 	}
 
@@ -80,7 +85,7 @@ func startNextcloudMonitor(wg *sync.WaitGroup, closeChan chan interface{}) error
 
 func main() {
 	var err error
-	settingsManager := settings.NewSettingsManager(
+	settingsManager = settings.NewSettingsManager(
 		"SGH",
 		"GoTalk",
 
@@ -88,8 +93,8 @@ func main() {
 
 		// Default User Settings
 		UserSettings{
-			PlayAudio:         true,
-			ShowNotifications: true,
+			PlayNotificationSounds: true,
+			ShowNotifications:      true,
 		},
 
 		// Default Org Settings
@@ -126,7 +131,7 @@ func main() {
 					ShowGuestNotifications:   true,
 					ShowBridgedNotifications: true,
 					ShowMutedNotifications:   false,
-					PlayAudio:                true,
+					PlayNotificationSounds:   true,
 				},
 			}
 		}
@@ -170,7 +175,7 @@ func main() {
 			var showGuestNotifications *fyne.MenuItem
 			var showBridgedNotifications *fyne.MenuItem
 			var showMutedNotifications *fyne.MenuItem
-			var playAudioSound *fyne.MenuItem
+			var playNotificationSounds *fyne.MenuItem
 
 			updateSettings := func() {
 				data := user.InstanceData[instance]
@@ -180,8 +185,10 @@ func main() {
 				data.NotificationSettings.ShowGuestNotifications = showGuestNotifications.Checked
 				data.NotificationSettings.ShowBridgedNotifications = showBridgedNotifications.Checked
 				data.NotificationSettings.ShowMutedNotifications = showMutedNotifications.Checked
-				data.NotificationSettings.PlayAudio = playAudioSound.Checked
+				data.NotificationSettings.PlayNotificationSounds = playNotificationSounds.Checked
 				user.InstanceData[instance] = data
+
+				settingsManager.Save(cache, user, org)
 			}
 
 			showUserNotifications = fyne.NewMenuItem("Show User Notifications", func() {
@@ -214,8 +221,8 @@ func main() {
 				updateSettings()
 				menu.Refresh()
 			})
-			playAudioSound = fyne.NewMenuItem("Notification Sound", func() {
-				playAudioSound.Checked = !playAudioSound.Checked
+			playNotificationSounds = fyne.NewMenuItem("Play Notification Sounds", func() {
+				playNotificationSounds.Checked = !playNotificationSounds.Checked
 				updateSettings()
 				menu.Refresh()
 			})
@@ -227,7 +234,7 @@ func main() {
 			showGuestNotifications.Checked = data.NotificationSettings.ShowGuestNotifications
 			showBridgedNotifications.Checked = data.NotificationSettings.ShowBridgedNotifications
 			showMutedNotifications.Checked = data.NotificationSettings.ShowMutedNotifications
-			playAudioSound.Checked = data.NotificationSettings.PlayAudio
+			playNotificationSounds.Checked = data.NotificationSettings.PlayNotificationSounds
 
 			submenu := fyne.NewMenuItem(instance, func() {})
 			submenu.ChildMenu = fyne.NewMenu(
@@ -239,7 +246,7 @@ func main() {
 				showBridgedNotifications,
 				//fyne.NewMenuItemSeparator(),
 				showMutedNotifications,
-				playAudioSound,
+				playNotificationSounds,
 			)
 
 			coreItems := submenu.ChildMenu.Items
@@ -262,6 +269,37 @@ func main() {
 
 			menu.Items = append(menu.Items, submenu)
 		}
+
+		var showNotifications *fyne.MenuItem
+		var playNotificationSounds *fyne.MenuItem
+
+		updateSettings := func() {
+			user.ShowNotifications = showNotifications.Checked
+			user.PlayNotificationSounds = playNotificationSounds.Checked
+
+			settingsManager.Save(cache, user, org)
+		}
+
+		showNotifications = fyne.NewMenuItem("Show Notifications", func() {
+			showNotifications.Checked = !showNotifications.Checked
+			updateSettings()
+			menu.Refresh()
+		})
+
+		playNotificationSounds = fyne.NewMenuItem("Play Notification Sounds", func() {
+			playNotificationSounds.Checked = !playNotificationSounds.Checked
+			updateSettings()
+			menu.Refresh()
+		})
+
+		showNotifications.Checked = user.ShowNotifications
+		playNotificationSounds.Checked = user.PlayNotificationSounds
+
+		menu.Items = append(
+			menu.Items,
+			showNotifications,
+			playNotificationSounds,
+		)
 
 		desk.SetSystemTrayMenu(menu)
 		desk.SetSystemTrayIcon(icon)
