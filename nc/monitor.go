@@ -22,15 +22,17 @@ type conversationLocalStorage struct {
 }
 type Monitor struct {
 	ncInstance              *Instance
+	repeatTime              float64
 	notificationSender      NotificationSender
 	notificationCountSetter NotificationCountSetter
 	settingsGetter          NotificationSettingsGetter
 	conversationData        map[int64]conversationLocalStorage
 }
 
-func NewMonitor(instance *Instance) *Monitor {
+func NewMonitor(instance *Instance, repeatTime float64) *Monitor {
 	return &Monitor{
 		ncInstance:         instance,
+		repeatTime:         repeatTime,
 		notificationSender: nil,
 		settingsGetter:     nil,
 		conversationData:   make(map[int64]conversationLocalStorage),
@@ -109,7 +111,8 @@ func (m *Monitor) ProcessMessages() (APIResponse, error) {
 			}
 			filteredCount += 1
 
-			if time.Since(convLocal.lastNotificationTimestamp).Minutes() > 5 || conv.LastReadMessage != convLocal.lastReadMessageId {
+			minsSinceLastNotification := time.Since(convLocal.lastNotificationTimestamp).Minutes()
+			if (minsSinceLastNotification >= 0.5 && minsSinceLastNotification >= m.repeatTime) || conv.LastReadMessage != convLocal.lastReadMessageId {
 				textPreview := conv.LastMessage.format()
 				convLocal.lastNotificationTimestamp = time.Now()
 				convLocal.lastReadMessageId = conv.LastReadMessage

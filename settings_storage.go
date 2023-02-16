@@ -36,9 +36,10 @@ type UserSettings struct {
 }
 
 type OrgInstanceSettings struct {
-	InstanceURL         string    // URL pointing to the Nextcloud instance
-	Login               LoginType // Chooses how to handle the application startup when the user isn't logged in yet
-	NotificationAppIcon string    // Custom App Icon. Uses DefaultIcon.png otherwise. Should be a full path pointing to a PNG file.
+	InstanceURL            string    // URL pointing to the Nextcloud instance
+	Login                  LoginType // Chooses how to handle the application startup when the user isn't logged in yet
+	NotificationRepeatTime float64   // After how many minutes should a notification for the same chat appear twice?
+	NotificationAppIcon    string    // Custom App Icon. Uses DefaultIcon.png otherwise. Should be a full path pointing to a PNG file.
 
 	setInstanceLoginMenuOption func(callback func())
 }

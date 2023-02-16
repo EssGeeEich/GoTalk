@@ -82,7 +82,7 @@ func (p *monitorProcData) run(wg *sync.WaitGroup, closeChan chan interface{}) {
 	p.ncInstance.SetCredentials(p.readCredentials())
 	p.ncInstance.OnCredentialsUpdated(p.saveCredentials)
 
-	p.ncMonitor = nc.NewMonitor(p.ncInstance)
+	p.ncMonitor = nc.NewMonitor(p.ncInstance, p.org.NotificationRepeatTime)
 	p.ncMonitor.SetNotificationSettingsGetter(p.getNotificationSettings)
 	p.ncMonitor.SetNotificationSender(p.sendNotification)
 
