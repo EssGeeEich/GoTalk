@@ -1,5 +1,8 @@
 package main
 
+//go:generate fyne bundle -o rsrc_defaulticon_ico.go DefaultIcon.ico
+//go:generate fyne bundle -o rsrc_defaulticon_png.go DefaultIcon.png
+
 import (
 	"log"
 	"os"
@@ -40,11 +43,14 @@ func sendMessageNotification(instance string, title string, message string, url 
 	if orgInstanceOk && orgInstance.NotificationAppIcon != "" {
 		icon = orgInstance.NotificationAppIcon
 	} else {
-		if icon, err = os.Executable(); err != nil {
-			return err
-		}
+		if cacheDir, err := settingsManager.CacheDir(); err == nil {
+			icon = cacheDir + string(os.PathSeparator) + "DefaultIcon.png"
 
-		icon = icon + string(os.PathSeparator) + "DefaultIcon.png"
+			_, err := os.Stat(icon)
+			if os.IsNotExist(err) {
+				os.WriteFile(icon, resourceDefaultIconPng.Content(), os.FileMode(0640))
+			}
+		}
 	}
 
 	notification := toast.Notification{
@@ -85,6 +91,7 @@ func startNextcloudMonitor(wg *sync.WaitGroup, closeChan chan interface{}) error
 
 func main() {
 	var err error
+
 	settingsManager = settings.NewSettingsManager(
 		"SGH",
 		"GoTalk",
@@ -148,12 +155,14 @@ func main() {
 		}
 	}()
 
-	iconPath := "DefaultIcon.ico"
+	var icon fyne.Resource
+
 	if org.SystemTrayAppIcon != "" {
-		iconPath = org.SystemTrayAppIcon
+		icon, _ = fyne.LoadResourceFromPath(org.SystemTrayAppIcon)
+	} else {
+		icon = resourceDefaultIconIco
 	}
 
-	icon, _ := fyne.LoadResourceFromPath(iconPath)
 	a := app.New()
 
 	if desk, ok := a.(desktop.App); ok {

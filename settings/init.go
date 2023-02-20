@@ -12,6 +12,10 @@ type SettingsManager[cacheT any, userT any, orgT any] struct {
 	userFilePath  string
 	orgFilePath   string
 
+	cacheAppDir string
+	userAppDir  string
+	orgAppDir   string
+
 	defaultCache        cacheT
 	defaultUserSettings userT
 	defaultOrgSettings  orgT
@@ -39,9 +43,9 @@ func (s *SettingsManager[cacheT, userT, orgT]) initDir() error {
 		return err
 	}
 
-	cacheAppDir := cacheDir + string(os.PathSeparator) + s.devName + string(os.PathSeparator) + s.appName
+	s.cacheAppDir = cacheDir + string(os.PathSeparator) + s.devName + string(os.PathSeparator) + s.appName
 
-	if err = os.MkdirAll(cacheAppDir, os.FileMode(0750)); err != nil {
+	if err = os.MkdirAll(s.cacheAppDir, os.FileMode(0750)); err != nil {
 		return err
 	}
 
@@ -51,9 +55,9 @@ func (s *SettingsManager[cacheT, userT, orgT]) initDir() error {
 		return err
 	}
 
-	userAppDir := userDir + string(os.PathSeparator) + s.devName + string(os.PathSeparator) + s.appName
+	s.userAppDir = userDir + string(os.PathSeparator) + s.devName + string(os.PathSeparator) + s.appName
 
-	if err = os.MkdirAll(userAppDir, os.FileMode(0750)); err != nil {
+	if err = os.MkdirAll(s.userAppDir, os.FileMode(0750)); err != nil {
 		return err
 	}
 
@@ -63,14 +67,35 @@ func (s *SettingsManager[cacheT, userT, orgT]) initDir() error {
 		return err
 	}
 
-	orgAppDir := orgDir + string(os.PathSeparator) + s.devName + string(os.PathSeparator) + s.appName
+	s.orgAppDir = orgDir + string(os.PathSeparator) + s.devName + string(os.PathSeparator) + s.appName
 
-	if err = os.MkdirAll(orgAppDir, os.FileMode(0750)); err != nil {
+	if err = os.MkdirAll(s.orgAppDir, os.FileMode(0750)); err != nil {
 		return err
 	}
 
-	s.cacheFilePath = cacheAppDir + string(os.PathSeparator) + s.appName + ".cache.toml"
-	s.userFilePath = userAppDir + string(os.PathSeparator) + s.appName + ".user.toml"
-	s.orgFilePath = orgAppDir + string(os.PathSeparator) + s.appName + ".org.toml"
+	s.cacheFilePath = s.cacheAppDir + string(os.PathSeparator) + s.appName + ".cache.toml"
+	s.userFilePath = s.userAppDir + string(os.PathSeparator) + s.appName + ".user.toml"
+	s.orgFilePath = s.orgAppDir + string(os.PathSeparator) + s.appName + ".org.toml"
 	return nil
+}
+
+func (s *SettingsManager[cacheT, userT, orgT]) CacheDir() (string, error) {
+	if err := s.initDir(); err != nil {
+		return "", err
+	}
+	return s.cacheAppDir, nil
+}
+
+func (s *SettingsManager[cacheT, userT, orgT]) UserDir() (string, error) {
+	if err := s.initDir(); err != nil {
+		return "", err
+	}
+	return s.userAppDir, nil
+}
+
+func (s *SettingsManager[cacheT, userT, orgT]) OrgDir() (string, error) {
+	if err := s.initDir(); err != nil {
+		return "", err
+	}
+	return s.orgAppDir, nil
 }
