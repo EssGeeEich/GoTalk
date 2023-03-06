@@ -12,6 +12,7 @@ import (
 	"GoTalk/nc"
 	"GoTalk/settings"
 
+	"github.com/pkg/browser"
 	"gopkg.in/toast.v1"
 
 	"fyne.io/fyne/v2"
@@ -178,6 +179,7 @@ func main() {
 
 		// Create the various submenus
 		for _, instance := range availableInstances {
+			var openInstance *fyne.MenuItem
 			var showUserNotifications *fyne.MenuItem
 			var showGroupNotifications *fyne.MenuItem
 			var showBotNotifications *fyne.MenuItem
@@ -200,6 +202,9 @@ func main() {
 				settingsManager.Save(cache, user, org)
 			}
 
+			openInstance = fyne.NewMenuItem("Open", func() {
+				browser.OpenURL(org.InstanceData[instance].InstanceURL)
+			})
 			showUserNotifications = fyne.NewMenuItem("Show User Notifications", func() {
 				showUserNotifications.Checked = !showUserNotifications.Checked
 				updateSettings()
@@ -248,6 +253,8 @@ func main() {
 			submenu := fyne.NewMenuItem(instance, func() {})
 			submenu.ChildMenu = fyne.NewMenu(
 				instance,
+				openInstance,
+				//fyne.NewMenuItemSeparator(),
 				showUserNotifications,
 				showGroupNotifications,
 				showBotNotifications,
@@ -310,6 +317,7 @@ func main() {
 			playNotificationSounds,
 		)
 
+		desk.SetSystemTrayIcon(icon)
 		desk.SetSystemTrayMenu(menu)
 		desk.SetSystemTrayIcon(icon)
 	}

@@ -18,8 +18,9 @@ type NotificationSettingsGetter func() NotificationSettings
 
 type conversationLocalStorage struct {
 	lastNotificationTimestamp time.Time
-	lastReadMessageId         int64
+	lastMessageId             int64
 }
+
 type Monitor struct {
 	ncInstance              *Instance
 	repeatTime              float64
@@ -90,7 +91,7 @@ func (m *Monitor) ProcessMessages() (APIResponse, error) {
 		if convLocal, ok = m.conversationData[conv.Id]; !ok {
 			convLocal = conversationLocalStorage{
 				lastNotificationTimestamp: time.Unix(0, 0),
-				lastReadMessageId:         0,
+				lastMessageId:             0,
 			}
 		}
 
@@ -112,10 +113,10 @@ func (m *Monitor) ProcessMessages() (APIResponse, error) {
 			filteredCount += 1
 
 			minsSinceLastNotification := time.Since(convLocal.lastNotificationTimestamp).Minutes()
-			if (minsSinceLastNotification >= 0.5 && minsSinceLastNotification >= m.repeatTime) || conv.LastReadMessage != convLocal.lastReadMessageId {
+			if (minsSinceLastNotification >= 0.5 && minsSinceLastNotification >= m.repeatTime) || conv.LastMessage.Id != convLocal.lastMessageId {
 				textPreview := conv.LastMessage.format()
 				convLocal.lastNotificationTimestamp = time.Now()
-				convLocal.lastReadMessageId = conv.LastReadMessage
+				convLocal.lastMessageId = conv.LastMessage.Id
 				m.conversationData[conv.Id] = convLocal
 				defer m.sendMessageNotification(conv.DisplayName, textPreview, m.ncInstance.GetBaseURL()+"/call/"+conv.LastMessage.Token, activeSettings.PlayNotificationSounds)
 			}
