@@ -95,7 +95,7 @@ func (m *Monitor) ProcessMessages() (APIResponse, error) {
 			}
 		}
 
-		if conv.UnreadMessages > 0 {
+		if conv.UnreadMessages > 0 && conv.LastMessage.ActorId != conv.ActorId {
 			unfilteredCount += 1
 			if conv.NotificationLevel == 3 && !activeSettings.ShowMutedNotifications {
 				continue

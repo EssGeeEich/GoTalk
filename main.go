@@ -254,13 +254,13 @@ func main() {
 			submenu.ChildMenu = fyne.NewMenu(
 				instance,
 				openInstance,
-				//fyne.NewMenuItemSeparator(),
+				fyne.NewMenuItemSeparator(),
 				showUserNotifications,
 				showGroupNotifications,
 				showBotNotifications,
 				showGuestNotifications,
 				showBridgedNotifications,
-				//fyne.NewMenuItemSeparator(),
+				fyne.NewMenuItemSeparator(),
 				showMutedNotifications,
 				playNotificationSounds,
 			)
