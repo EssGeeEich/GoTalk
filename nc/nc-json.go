@@ -127,8 +127,8 @@ type NextcloudSpreedConversationData struct {
 	LastMessage           NextcloudSpreedMessageData `json:"lastMessage"`
 	ObjectType            string                     `json:"objectType"`
 	ObjectId              string                     `json:"objectId"`
-	BreakoutRoomMode      string                     `json:"breakoutRoomMode"`
-	BreakoutRoomStatus    string                     `json:"breakoutRoomStatus"`
+	BreakoutRoomMode      interface{}                `json:"breakoutRoomMode"`
+	BreakoutRoomStatus    interface{}                `json:"breakoutRoomStatus"`
 	Status                string                     `json:"status"`
 	StatusIcon            string                     `json:"statusIcon"`
 	StatusMessage         string                     `json:"statusMessage"`
