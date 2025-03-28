@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/billgraziano/dpapi"
 	"github.com/pkg/browser"
 )
 
@@ -37,7 +36,7 @@ func newMonitorProc(instanceName string) monitorProcData {
 func (p *monitorProcData) readCredentials() nc.AuthCredentials {
 	var decPassword string
 	var err error
-	if decPassword, err = dpapi.Decrypt(p.cache.EncryptedAppPassword); err != nil {
+	if decPassword, err = crypto_decrypt(p.cache.EncryptedAppPassword); err != nil {
 		decPassword = ""
 	}
 
@@ -52,7 +51,7 @@ func (p *monitorProcData) saveCredentials(cred nc.AuthCredentials) {
 	p.cache.EncryptedAppPassword = ""
 
 	if cred.AppPassword != "" {
-		s, err := dpapi.Encrypt(cred.AppPassword)
+		s, err := crypto_encrypt(cred.AppPassword)
 		if err != nil {
 			return
 		}
