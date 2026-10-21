@@ -1,6 +1,9 @@
 package nc
 
-import "time"
+import (
+	"net/url"
+	"time"
+)
 
 type NotificationSettings struct {
 	ShowUserNotifications    bool // Whether to show notifications for regular 1-on-1 chats
@@ -118,7 +121,7 @@ func (m *Monitor) ProcessMessages() (APIResponse, error) {
 				convLocal.lastNotificationTimestamp = time.Now()
 				convLocal.lastMessageId = conv.LastMessage.Id
 				m.conversationData[conv.Id] = convLocal
-				defer m.sendMessageNotification(conv.DisplayName, textPreview, m.ncInstance.GetBaseURL()+"/call/"+conv.LastMessage.Token, activeSettings.PlayNotificationSounds)
+				defer m.sendMessageNotification(conv.DisplayName, textPreview, m.ncInstance.GetBaseURL()+"/call/"+url.PathEscape(conv.Token), activeSettings.PlayNotificationSounds)
 			}
 		}
 	}

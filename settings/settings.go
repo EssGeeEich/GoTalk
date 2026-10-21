@@ -91,7 +91,8 @@ func (s *SettingsManager[cacheT, userT, orgT]) SaveCache(cacheS *cacheT) error {
 		return err
 	}
 
-	return os.WriteFile(s.cacheFilePath, data, os.FileMode(0640))
+	// The cache holds the (encrypted) credentials: keep it private to the user.
+	return os.WriteFile(s.cacheFilePath, data, os.FileMode(0600))
 }
 
 func (s *SettingsManager[cacheT, userT, orgT]) SaveUser(userSettings *userT) error {

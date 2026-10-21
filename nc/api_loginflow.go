@@ -3,8 +3,12 @@ package nc
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -12,6 +16,7 @@ type LoginFlow struct {
 	instance         *Instance
 	chanWaitFinished chan interface{}
 	chanCancel       chan interface{}
+	cancelOnce       sync.Once
 	endpoint         string
 	token            string
 	requestStart     time.Time
@@ -29,7 +34,9 @@ func (f *LoginFlow) Wait() (APIResponse, LoginResult, *AuthCredentials, error) {
 }
 
 func (f *LoginFlow) Cancel() {
-	close(f.chanCancel)
+	f.cancelOnce.Do(func() {
+		close(f.chanCancel)
+	})
 }
 
 func (f *LoginFlow) Start() (APIResponse, string, error) {
@@ -46,17 +53,28 @@ func (f *LoginFlow) Start() (APIResponse, string, error) {
 
 	if resp.StatusCode == 503 {
 		return APIMaintenance, "", nil
+	} else if resp.StatusCode != 200 {
+		return APIUnreachable, "", errors.New("unknown server response")
 	}
 
 	f.requestStart = time.Now()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return APIUnreachable, "", err
 	}
 
 	ncFlow := nextcloudLoginFlow{}
 	if err = json.Unmarshal(body, &ncFlow); err != nil {
+		return APIUnreachable, "", err
+	}
+
+	// The login URL gets opened in the browser and the poll endpoint receives the token:
+	// make sure that neither of them can be abused.
+	if err = f.instance.checkServerURL(ncFlow.Login); err != nil {
+		return APIUnreachable, "", err
+	}
+	if err = f.instance.checkServerURL(ncFlow.Poll.Endpoint); err != nil {
 		return APIUnreachable, "", err
 	}
 
@@ -85,7 +103,7 @@ func (f *LoginFlow) runCheck() {
 		select {
 		case <-timer.C:
 			if !f.runSingleCheck() {
-				close(f.chanCancel)
+				f.Cancel()
 				return
 			}
 		case <-f.chanCancel:
@@ -102,7 +120,7 @@ func (f *LoginFlow) runSingleCheck() bool {
 		return false
 	}
 
-	req, err := f.instance.NewRequest(http.MethodPost, f.endpoint, bytes.NewReader([]byte("token="+f.token)))
+	req, err := f.instance.NewRequest(http.MethodPost, f.endpoint, strings.NewReader(url.Values{"token": {f.token}}.Encode()))
 	if err != nil {
 		f.response = APIUnreachable
 		f.result = LoginError
@@ -125,13 +143,19 @@ func (f *LoginFlow) runSingleCheck() bool {
 		f.response = APIMaintenance
 		f.result = LoginFailed
 		return false
+	} else if resp.StatusCode != 200 {
+		f.response = APIUnreachable
+		f.result = LoginError
+		f.err = errors.New("unknown server response")
+		return false
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		f.response = APIUnreachable
 		f.result = LoginError
 		f.err = err
+		return false
 	}
 
 	ncRes := nextcloudAuthResult{}
@@ -139,6 +163,14 @@ func (f *LoginFlow) runSingleCheck() bool {
 		f.response = APIUnreachable
 		f.result = LoginError
 		f.err = err
+		return false
+	}
+
+	if ncRes.LoginName == "" || ncRes.AppPassword == "" {
+		f.response = APIUnreachable
+		f.result = LoginError
+		f.err = errors.New("the server did not return any credentials")
+		return false
 	}
 
 	f.endpoint = ""

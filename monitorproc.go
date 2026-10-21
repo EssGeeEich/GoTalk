@@ -27,6 +27,11 @@ const (
 	LoginFlowSuccessful
 )
 
+type loginFlowOutcome struct {
+	LoginFlowResult
+	nc.AuthCredentials
+}
+
 func newMonitorProc(instanceName string) monitorProcData {
 	return monitorProcData{
 		instanceName: instanceName,
@@ -58,11 +63,17 @@ func (p *monitorProcData) saveCredentials(cred nc.AuthCredentials) {
 		p.cache.EncryptedAppPassword = s
 	}
 
+	settingsMutex.Lock()
+	defer settingsMutex.Unlock()
+
 	cache.InstanceData[p.instanceName] = p.cache
-	settingsManager.Save(cache, user, org)
+	saveSettings()
 }
 
 func (p *monitorProcData) getNotificationSettings() nc.NotificationSettings {
+	settingsMutex.Lock()
+	defer settingsMutex.Unlock()
+
 	return user.InstanceData[p.instanceName].NotificationSettings
 }
 
@@ -70,12 +81,27 @@ func (p *monitorProcData) sendNotification(instance string, title string, messag
 	return sendMessageNotification(instance, title, message, url, playAudio)
 }
 
+// Login requests are shown even if the user disabled message notifications,
+// otherwise there would be no way to log in again.
+func (p *monitorProcData) sendLoginNotification(url string) error {
+	return pushNotification(p.instanceName, p.instanceName, "Login to NextCloud", url, true)
+}
+
+func (p *monitorProcData) setLoginMenuOption(callback func()) {
+	if p.org.setInstanceLoginMenuOption != nil {
+		p.org.setInstanceLoginMenuOption(callback)
+	}
+}
+
 func (p *monitorProcData) run(wg *sync.WaitGroup, closeChan chan interface{}) {
 	defer wg.Done()
 
+	settingsMutex.Lock()
 	p.cache = cache.InstanceData[p.instanceName]
 	p.org = org.InstanceData[p.instanceName]
 	p.user = user.InstanceData[p.instanceName]
+	messageCheckTime := org.MessageCheckTime
+	settingsMutex.Unlock()
 
 	p.ncInstance = nc.NewInstance(p.instanceName, p.org.InstanceURL)
 	p.ncInstance.SetCredentials(p.readCredentials())
@@ -85,7 +111,10 @@ func (p *monitorProcData) run(wg *sync.WaitGroup, closeChan chan interface{}) {
 	p.ncMonitor.SetNotificationSettingsGetter(p.getNotificationSettings)
 	p.ncMonitor.SetNotificationSender(p.sendNotification)
 
-	messageCheckTime := org.MessageCheckTime
+	if !p.ncInstance.IsSecure() {
+		log.Printf("%s: the instance URL does not use HTTPS, credentials will be sent unencrypted", p.instanceName)
+	}
+
 	if messageCheckTime <= 5 {
 		messageCheckTime = 5
 	}
@@ -127,7 +156,7 @@ LoginCheck:
 		}
 	}
 
-	defer p.org.setInstanceLoginMenuOption(nil)
+	defer p.setLoginMenuOption(nil)
 
 RunLoop:
 	for {
@@ -146,7 +175,7 @@ RunLoop:
 				log.Print(err)
 			}
 
-			if resp != nc.APISuccess {
+			if resp != nc.APISuccess || err != nil {
 				// Error trying to start the Login Flow:
 				// Retry in a bit.
 				select {
@@ -159,20 +188,25 @@ RunLoop:
 
 			// Waiting for the login flow to end.
 			// Alternative: The app is quitting, get out.
+			var result loginFlowOutcome
 			select {
-			case result, ok := <-chanWaitLogin:
-				if ok {
-					if result.LoginFlowResult == LoginFlowSuccessful {
-						shouldLogin = false
-						p.ncInstance.SetCredentials(result.AuthCredentials)
-					} else {
-						shouldLogin = true
-					}
-				}
+			case result = <-chanWaitLogin:
 			case <-closeChan:
 				break RunLoop
 			}
-			p.org.setInstanceLoginMenuOption(nil)
+			p.setLoginMenuOption(nil)
+
+			if result.LoginFlowResult == LoginFlowSuccessful {
+				shouldLogin = false
+				p.ncInstance.SetCredentials(result.AuthCredentials)
+			} else if result.LoginFlowResult == LoginFlowError {
+				// Don't start a new Login Flow (and possibly open the browser) right away.
+				select {
+				case <-time.After(time.Second * 30):
+				case <-closeChan:
+					break RunLoop
+				}
+			}
 		} else {
 			// We're logged in, process our request.
 			resp, err := p.handleLoginSuccessful()
@@ -230,252 +264,100 @@ func (p *monitorProcData) handleLoginSuccessful() (nc.APIResponse, error) {
 	return nc.APISuccess, nil
 }
 
-func (p *monitorProcData) handleLoginRequired() (chan struct {
-	LoginFlowResult
-	nc.AuthCredentials
-}, nc.APIResponse, error) {
-	chanLoginFlow := make(chan struct {
-		LoginFlowResult
-		nc.AuthCredentials
-	})
+// Waits for a started login flow to end.
+func waitLoginFlow(loginFlow *nc.LoginFlow) loginFlowOutcome {
+	resp, res, cred, err := loginFlow.Wait()
+	if err != nil {
+		log.Print(err)
+	}
 
-	// Close this login flow right away for convenience.
-	// We're gonna return a valid channel only if the function succeeds.
-	close(chanLoginFlow)
+	if resp != nc.APISuccess || err != nil {
+		return loginFlowOutcome{LoginFlowError, nc.AuthCredentials{}}
+	}
+
+	if res == nc.LoginSuccessful && cred != nil {
+		return loginFlowOutcome{LoginFlowSuccessful, *cred}
+	}
+
+	// Login Flow Canceled / Timeout
+	return loginFlowOutcome{LoginFlowCanceledOrTimeout, nc.AuthCredentials{}}
+}
+
+func (p *monitorProcData) openLoginPage(url string) error {
+	if err := browser.OpenURL(url); err != nil {
+		// Could not open the browser: Send a notification.
+		return p.sendLoginNotification(url)
+	}
+	return nil
+}
+
+// Runs a whole login flow, started from the context menu.
+func (p *monitorProcData) runContextMenuLogin() loginFlowOutcome {
+	loginFlow := p.ncInstance.NewLoginFlow()
+
+	resp, url, err := loginFlow.Start()
+	if resp != nc.APISuccess || err != nil {
+		if err != nil {
+			log.Print(err)
+		}
+		return loginFlowOutcome{LoginFlowError, nc.AuthCredentials{}}
+	}
+
+	if err = p.openLoginPage(url); err != nil {
+		log.Print(err)
+		loginFlow.Cancel()
+		return loginFlowOutcome{LoginFlowError, nc.AuthCredentials{}}
+	}
+
+	return waitLoginFlow(loginFlow)
+}
+
+// The returned channel receives the outcome of the login flow,
+// and is only valid if the function returns nc.APISuccess and no error.
+func (p *monitorProcData) handleLoginRequired() (chan loginFlowOutcome, nc.APIResponse, error) {
+	// Buffered, so that the outcome can be delivered even if nobody is waiting for it anymore.
+	chanLoginFlow := make(chan loginFlowOutcome, 1)
 
 	switch p.org.Login {
-	case LoginImmediately:
+	case LoginImmediately, LoginWithNotification:
 		loginFlow := p.ncInstance.NewLoginFlow()
-		if loginFlow == nil {
-			return chanLoginFlow, nc.APIUnreachable, errors.New("the login flow failed")
-		}
 
 		resp, url, err := loginFlow.Start()
-
 		if resp != nc.APISuccess || err != nil {
-			return chanLoginFlow, resp, err
+			return nil, resp, err
 		}
 
-		if err = browser.OpenURL(url); err != nil {
-			// Could not open the browser: Send a notification.
-			if err = p.sendNotification(p.instanceName, p.instanceName, "Login to NextCloud", url, true); err != nil {
-				loginFlow.Cancel()
-				return chanLoginFlow, resp, err
-			}
+		if p.org.Login == LoginImmediately {
+			err = p.openLoginPage(url)
+		} else {
+			err = p.sendLoginNotification(url)
 		}
-
-		chanLoginFlow = make(chan struct {
-			LoginFlowResult
-			nc.AuthCredentials
-		})
-
-		go func() {
-			resp, res, cred, err := loginFlow.Wait()
-
-			// Login Flow Canceled / Timeout
-			if resp != nc.APISuccess || err != nil {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowCanceledOrTimeout,
-					nc.AuthCredentials{},
-				}
-
-				close(chanLoginFlow)
-				return
-			}
-
-			if res == nc.LoginSuccessful && cred != nil {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowSuccessful,
-					*cred,
-				}
-
-				close(chanLoginFlow)
-				return
-			} else {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowCanceledOrTimeout,
-					nc.AuthCredentials{},
-				}
-
-				close(chanLoginFlow)
-				return
-			}
-		}()
-
-		return chanLoginFlow, resp, nil
-
-	case LoginWithNotification:
-		loginFlow := p.ncInstance.NewLoginFlow()
-		if loginFlow == nil {
-			return chanLoginFlow, nc.APIUnreachable, errors.New("the login flow failed")
-		}
-
-		resp, url, err := loginFlow.Start()
-
-		if resp != nc.APISuccess || err != nil {
-			return chanLoginFlow, resp, err
-		}
-
-		if err = p.sendNotification(p.instanceName, p.instanceName, "Login to NextCloud", url, true); err != nil {
+		if err != nil {
 			loginFlow.Cancel()
-			return chanLoginFlow, resp, err
+			return nil, resp, err
 		}
 
-		chanLoginFlow = make(chan struct {
-			LoginFlowResult
-			nc.AuthCredentials
-		})
-
 		go func() {
-			resp, res, cred, err := loginFlow.Wait()
-
-			// Login Flow Canceled / Timeout
-			if resp != nc.APISuccess || err != nil {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowCanceledOrTimeout,
-					nc.AuthCredentials{},
-				}
-
-				close(chanLoginFlow)
-				return
-			}
-
-			if res == nc.LoginSuccessful && cred != nil {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowSuccessful,
-					*cred,
-				}
-
-				close(chanLoginFlow)
-				return
-			} else {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowCanceledOrTimeout,
-					nc.AuthCredentials{},
-				}
-
-				close(chanLoginFlow)
-				return
-			}
+			chanLoginFlow <- waitLoginFlow(loginFlow)
 		}()
 
-		return chanLoginFlow, resp, nil
+		return chanLoginFlow, nc.APISuccess, nil
 
 	case LoginWithContextMenu:
-		chanLoginFlow = make(chan struct {
-			LoginFlowResult
-			nc.AuthCredentials
-		})
-
-		p.org.setInstanceLoginMenuOption(func() {
-			loginFlow := p.ncInstance.NewLoginFlow()
-			if loginFlow == nil {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowError,
-					nc.AuthCredentials{},
-				}
-
-				close(chanLoginFlow)
-				return
-			}
-
-			resp, url, err := loginFlow.Start()
-
-			if resp != nc.APISuccess || err != nil {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowError,
-					nc.AuthCredentials{},
-				}
-
-				close(chanLoginFlow)
-				return
-			}
-
-			if err = browser.OpenURL(url); err != nil {
-				// Could not open the browser: Send a notification.
-				if err = p.sendNotification(p.instanceName, p.instanceName, "Login to NextCloud", url, true); err != nil {
-					loginFlow.Cancel()
-					chanLoginFlow <- struct {
-						LoginFlowResult
-						nc.AuthCredentials
-					}{
-						LoginFlowError,
-						nc.AuthCredentials{},
-					}
-
-					close(chanLoginFlow)
-					return
-				}
-			}
-
-			resp, res, cred, err := loginFlow.Wait()
-
-			// Login Flow Canceled / Timeout
-			if resp != nc.APISuccess || err != nil {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowCanceledOrTimeout,
-					nc.AuthCredentials{},
-				}
-
-				close(chanLoginFlow)
-				return
-			}
-
-			if res == nc.LoginSuccessful && cred != nil {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowSuccessful,
-					*cred,
-				}
-
-				close(chanLoginFlow)
-				return
-			} else {
-				chanLoginFlow <- struct {
-					LoginFlowResult
-					nc.AuthCredentials
-				}{
-					LoginFlowCanceledOrTimeout,
-					nc.AuthCredentials{},
-				}
-
-				close(chanLoginFlow)
-				return
-			}
+		var loginStarted sync.Once
+		p.setLoginMenuOption(func() {
+			// Menu actions run on the UI goroutine: never block it while the user logs in,
+			// and only ever start one login flow.
+			loginStarted.Do(func() {
+				go func() {
+					chanLoginFlow <- p.runContextMenuLogin()
+				}()
+			})
 		})
 		return chanLoginFlow, nc.APISuccess, nil
 	}
 
-	return chanLoginFlow, nc.APIUnreachable, errors.New("invalid login mode")
+	return nil, nc.APIUnreachable, errors.New("invalid login mode")
 }
 
 // Returns false, error in case of error.

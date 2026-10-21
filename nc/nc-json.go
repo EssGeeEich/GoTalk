@@ -1,6 +1,8 @@
 package nc
 
 import (
+	"bytes"
+	"encoding/json"
 	"regexp"
 )
 
@@ -49,11 +51,23 @@ type NextcloudSpreedMessageData struct {
 	ReactionsSelf       []string    `json:"reactionsSelf,omitempty"`
 }
 
+// Talk sends an empty array instead of an object when a conversation has no last message.
+func (msg *NextcloudSpreedMessageData) UnmarshalJSON(data []byte) error {
+	if bytes.HasPrefix(bytes.TrimSpace(data), []byte("[")) {
+		*msg = NextcloudSpreedMessageData{}
+		return nil
+	}
+
+	type plainMessageData NextcloudSpreedMessageData
+	return json.Unmarshal(data, (*plainMessageData)(msg))
+}
+
+var messageParameterRegex = regexp.MustCompile(`{[^{}]*}`)
+
 func (msg *NextcloudSpreedMessageData) format() string {
 	parameters, ok := msg.MessageParameters.(map[string]interface{})
 	if ok && parameters != nil {
-		regexReplace := regexp.MustCompile(`{[^{}]*}`)
-		return string(regexReplace.ReplaceAllFunc(
+		return string(messageParameterRegex.ReplaceAllFunc(
 			[]byte(msg.Message),
 			func(source []byte) []byte {
 				// The following line relies on { and } being only 1 byte long.

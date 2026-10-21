@@ -10,10 +10,10 @@ import (
 	"sync"
 
 	"GoTalk/nc"
+	"GoTalk/notify"
 	"GoTalk/settings"
 
 	"github.com/pkg/browser"
-	"gopkg.in/toast.v1"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -26,18 +26,37 @@ var (
 	user  *UserSettings
 	org   *OrgSettings
 
+	// Guards cache, user and org, which are shared between the UI and the monitors.
+	settingsMutex sync.Mutex
+
 	settingsManager *settings.SettingsManager[Cache, UserSettings, OrgSettings]
 )
 
+// Must be called with settingsMutex held.
+func saveSettings() {
+	if err := settingsManager.Save(cache, user, org); err != nil {
+		log.Print(err)
+	}
+}
+
 func sendMessageNotification(instance string, title string, message string, url string, playAudio bool) error {
-	if !user.ShowNotifications {
+	settingsMutex.Lock()
+	showNotifications := user.ShowNotifications
+	settingsMutex.Unlock()
+
+	if !showNotifications {
 		return nil
 	}
 
-	var err error
+	return pushNotification(instance, title, message, url, playAudio)
+}
 
-	// cacheInstance, cacheInstanceOk := cache.InstanceData[instance]
+// Shows a notification regardless of the global "Show Notifications" toggle.
+func pushNotification(instance string, title string, message string, url string, playAudio bool) error {
+	settingsMutex.Lock()
 	orgInstance, orgInstanceOk := org.InstanceData[instance]
+	playNotificationSounds := user.PlayNotificationSounds
+	settingsMutex.Unlock()
 
 	// Determine which icon should be displayed
 	var icon string
@@ -54,28 +73,24 @@ func sendMessageNotification(instance string, title string, message string, url 
 		}
 	}
 
-	notification := toast.Notification{
+	notification := notify.Notification{
 		AppID:               "Nextcloud Talk",
 		Title:               title,
 		Message:             message,
-		Audio:               toast.IM,
+		Audio:               notify.AudioIM,
 		ActivationArguments: url,
 		Icon:                icon,
-		Actions: []toast.Action{
-			{Type: "protocol", Label: "Open", Arguments: url},
+		Actions: []notify.Action{
+			{Label: "Open", Arguments: url},
 		},
 	}
 
 	// Determine whether the user wants audio for this instance
-	if !user.PlayNotificationSounds || !playAudio {
-		notification.Audio = toast.Silent
+	if !playNotificationSounds || !playAudio {
+		notification.Silent = true
 	}
 
-	if err = notification.Push(); err != nil {
-		return err
-	}
-
-	return nil
+	return notification.Push()
 }
 
 func startNextcloudMonitor(wg *sync.WaitGroup, closeChan chan interface{}) error {
@@ -150,18 +165,19 @@ func main() {
 	}
 
 	defer func() {
-		if err := settingsManager.Save(cache, user, org); err != nil {
-			log.Fatal(err)
-			return
-		}
+		settingsMutex.Lock()
+		defer settingsMutex.Unlock()
+		saveSettings()
 	}()
 
-	var icon fyne.Resource
+	var icon fyne.Resource = resourceDefaultIconIco
 
 	if org.SystemTrayAppIcon != "" {
-		icon, _ = fyne.LoadResourceFromPath(org.SystemTrayAppIcon)
-	} else {
-		icon = resourceDefaultIconIco
+		if customIcon, err := fyne.LoadResourceFromPath(org.SystemTrayAppIcon); err == nil {
+			icon = customIcon
+		} else {
+			log.Print(err)
+		}
 	}
 
 	a := app.New()
@@ -189,6 +205,9 @@ func main() {
 			var playNotificationSounds *fyne.MenuItem
 
 			updateSettings := func() {
+				settingsMutex.Lock()
+				defer settingsMutex.Unlock()
+
 				data := user.InstanceData[instance]
 				data.NotificationSettings.ShowUserNotifications = showUserNotifications.Checked
 				data.NotificationSettings.ShowGroupNotifications = showGroupNotifications.Checked
@@ -199,7 +218,7 @@ func main() {
 				data.NotificationSettings.PlayNotificationSounds = playNotificationSounds.Checked
 				user.InstanceData[instance] = data
 
-				settingsManager.Save(cache, user, org)
+				saveSettings()
 			}
 
 			openInstance = fyne.NewMenuItem("Open", func() {
@@ -270,16 +289,17 @@ func main() {
 
 			inst := org.InstanceData[instance]
 			inst.setInstanceLoginMenuOption = func(callback func()) {
-				if callback == nil {
-					loginItem.Action = nil
-					submenu.ChildMenu.Items = coreItems
+				// Called from the monitors: the menu may only be changed from the UI goroutine.
+				fyne.Do(func() {
+					if callback == nil {
+						loginItem.Action = nil
+						submenu.ChildMenu.Items = coreItems
+					} else {
+						loginItem.Action = callback
+						submenu.ChildMenu.Items = append(coreItems[:len(coreItems):len(coreItems)], loginItem)
+					}
 					menu.Refresh()
-				} else {
-					submenu.ChildMenu.Items = coreItems
-					loginItem.Action = callback
-					submenu.ChildMenu.Items = append(submenu.ChildMenu.Items, loginItem)
-					menu.Refresh()
-				}
+				})
 			}
 			org.InstanceData[instance] = inst
 
@@ -290,10 +310,13 @@ func main() {
 		var playNotificationSounds *fyne.MenuItem
 
 		updateSettings := func() {
+			settingsMutex.Lock()
+			defer settingsMutex.Unlock()
+
 			user.ShowNotifications = showNotifications.Checked
 			user.PlayNotificationSounds = playNotificationSounds.Checked
 
-			settingsManager.Save(cache, user, org)
+			saveSettings()
 		}
 
 		showNotifications = fyne.NewMenuItem("Show Notifications", func() {
@@ -317,7 +340,6 @@ func main() {
 			playNotificationSounds,
 		)
 
-		desk.SetSystemTrayIcon(icon)
 		desk.SetSystemTrayMenu(menu)
 		desk.SetSystemTrayIcon(icon)
 	}

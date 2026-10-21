@@ -61,7 +61,7 @@ func (i *Instance) ValidateCredentials(credentials AuthCredentials) (CredentialV
 		return CredentialsValidationFailed, APIUnreachable, errors.New("unknown server response")
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 	if err != nil {
 		return CredentialsValidationFailed, APIUnreachable, err
 	}
